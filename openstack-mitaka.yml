@@ -1058,11 +1058,11 @@
         openstack-config --set /etc/cinder/cinder.conf keystone_authtoken auth_uri http://{{ inventory_hostname }}:5000
         openstack-config --set /etc/cinder/cinder.conf keystone_authtoken auth_url http://{{ inventory_hostname }}:35357
         openstack-config --set /etc/cinder/cinder.conf keystone_authtoken memcached_servers {{ inventory_hostname }}:11211
-        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken keystone_authtoken auth_type password
-        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken keystone_authtoken project_domain_name default
-        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken keystone_authtoken user_domain_name default
-        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken keystone_authtoken project_name service
-        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken keystone_authtoken username cinder
+        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken auth_type password
+        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken project_domain_name default
+        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken user_domain_name default
+        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken project_name service
+        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken username cinder
         openstack-config --set /etc/cinder/cinder.conf keystone_authtoken password password
         openstack-config --set /etc/cinder/cinder.conf DEFAULT my_ip {{ ansible_eno16777984.ipv4.address }}
         openstack-config --set /etc/cinder/cinder.conf oslo_concurrency lock_path /var/lib/cinder/tmp
@@ -1095,5 +1095,81 @@
       with_items:
         - openstack-cinder-api
         - openstack-cinder-scheduler
+
+- hosts: openstack-mitaka-block
+  name: cinder installtion and configuration on block storage node
+  user: root
+  vars_files:
+    - vars/openstack.yml
+  tasks:
+    - name: install lvm2 package
+      yum: name=lvm2
+
+    - name: start and enable lvm services
+      service: name={{ item }} state=started enabled=yes
+      with_items:
+        - lvm2-lvmetad
+
+    - name: pvdisplay
+      command: pvdisplay /dev/sdb
+      register: result
+      ignore_errors: true
+
+    - name: pvcreate
+      command: pvcreate /dev/sdb
+      when: result | failed
+
+    - name: vgcreate
+      lvg: vg="cinder-volumes" pvs="/dev/sdb" state=present
+
+    - name: config lvm.conf
+      lineinfile: dest=/etc/lvm/lvm.conf insertafter="^devices {" line="filter = [ \"a/sda/\", \"a/sdb/\", \"r/.*/\"]"
+
+    - name: install cinder packages
+      yum: name={{ item }} state=present
+      with_items:
+        - openstack-cinder
+        - python-keystonemiddleware
+        - targetcli
+
+    - name: config cinder.conf
+      shell: |
+        openstack-config --set /etc/cinder/cinder.conf database connection mysql+pymysql://cinder:password@{{ controller_hostname }}/cinder
+        openstack-config --set /etc/cinder/cinder.conf DEFAULT rpc_backend rabbit
+        openstack-config --set /etc/cinder/cinder.conf oslo_messaging_rabbit rabbit_host {{ controller_hostname }}
+        openstack-config --set /etc/cinder/cinder.conf oslo_messaging_rabbit rabbit_userid openstack
+        openstack-config --set /etc/cinder/cinder.conf oslo_messaging_rabbit rabbit_password password
+        openstack-config --set /etc/cinder/cinder.conf DEFAULT auth_strategy keystone
+        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken auth_uri http://{{ controller_hostname }}:5000
+        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken auth_url http://{{ controller_hostname }}:35357
+        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken memcached_servers {{ controller_hostname }}:11211
+        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken auth_type password
+        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken project_domain_name default
+        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken user_domain_name default
+        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken project_name service
+        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken username cinder
+        openstack-config --set /etc/cinder/cinder.conf keystone_authtoken password password
+        openstack-config --set /etc/cinder/cinder.conf DEFAULT my_ip {{ ansible_eno16777984.ipv4.address }}
+        openstack-config --set /etc/cinder/cinder.conf lvm volume_driver cinder.volume.drivers.lvm.LVMVolumeDriver
+        openstack-config --set /etc/cinder/cinder.conf lvm volume_group cinder-volumes
+        openstack-config --set /etc/cinder/cinder.conf lvm iscsi_protocol iscsi
+        openstack-config --set /etc/cinder/cinder.conf lvm iscsi_helper lioadm
+        openstack-config --set /etc/cinder/cinder.conf DEFAULT enabled_backends lvm
+        openstack-config --set /etc/cinder/cinder.conf DEFAULT glance_api_servers http://{{ controller_hostname }}:9292
+        openstack-config --set /etc/cinder/cinder.conf oslo_concurrency lock_path /var/lib/cinder/tmp
+      notify: restart openstack-cinder services
+
+    - name: start and enable openstack cinder services
+      service: name={{ item }} state=started enabled=yes
+      with_items:
+        - openstack-cinder-volume
+        - target
+
+  handlers:
+    - name: restart openstack-cinder services
+      service: name={{ item }} state=restarted
+      with_items:
+        - openstack-cinder-volume
+        - target
 
 
